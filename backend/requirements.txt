@@ -4,6 +4,7 @@ fastapi==0.139.0
 uvicorn[standard]==0.50.2
 pydantic==2.13.4
 pydantic-settings==2.14.2
+sqlite-vec==0.1.9
 
 ## Test tooling
 pytest==9.1.1
