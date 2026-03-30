@@ -55,7 +55,9 @@ def session(db_path: Path | str | None = None) -> Iterator[sqlite3.Connection]:
 def init_db(db_path: Path | str | None = None) -> None:
     """Create all tables/virtual tables if they don't exist yet. Safe to
     call on every startup — every statement is CREATE ... IF NOT EXISTS."""
-    schema_sql = SCHEMA_PATH.read_text(encoding="utf-8").format(embedding_dim=settings.EMBEDDING_DIM)
+    schema_sql = SCHEMA_PATH.read_text(encoding="utf-8").replace(
+        "__EMBEDDING_DIM__", str(settings.EMBEDDING_DIM)
+    )
     conn = get_connection(db_path)
     try:
         conn.executescript(schema_sql)

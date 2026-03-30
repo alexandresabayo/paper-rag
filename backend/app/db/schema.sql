@@ -120,7 +120,7 @@ CREATE INDEX IF NOT EXISTS idx_queries_created_at ON queries(created_at);
 -- rowid = ?`. distance_metric=cosine so "distance" here is cosine
 -- distance (1 - cosine_similarity) — see app/services/retrieval_service.py.
 -- =====================================================================
-CREATE VIRTUAL TABLE IF NOT EXISTS page_content_vec  USING vec0(embedding FLOAT[{embedding_dim}] distance_metric=cosine);
-CREATE VIRTUAL TABLE IF NOT EXISTS page_summary_vec  USING vec0(embedding FLOAT[{embedding_dim}] distance_metric=cosine);
-CREATE VIRTUAL TABLE IF NOT EXISTS page_keywords_vec USING vec0(embedding FLOAT[{embedding_dim}] distance_metric=cosine);
-CREATE VIRTUAL TABLE IF NOT EXISTS document_vec      USING vec0(embedding FLOAT[{embedding_dim}] distance_metric=cosine);
+CREATE VIRTUAL TABLE IF NOT EXISTS page_content_vec  USING vec0(embedding FLOAT[__EMBEDDING_DIM__] distance_metric=cosine);
+CREATE VIRTUAL TABLE IF NOT EXISTS page_summary_vec  USING vec0(embedding FLOAT[__EMBEDDING_DIM__] distance_metric=cosine);
+CREATE VIRTUAL TABLE IF NOT EXISTS page_keywords_vec USING vec0(embedding FLOAT[__EMBEDDING_DIM__] distance_metric=cosine);
+CREATE VIRTUAL TABLE IF NOT EXISTS document_vec      USING vec0(embedding FLOAT[__EMBEDDING_DIM__] distance_metric=cosine);
