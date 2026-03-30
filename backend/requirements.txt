@@ -1,0 +1,9 @@
+## Core — required to run the API, pipeline, and tests in MOCK_MODE
+## (no GPU / Ollama needed). This is everything you need for local dev.
+fastapi==0.139.0
+uvicorn[standard]==0.50.2
+pydantic==2.13.4
+pydantic-settings==2.14.2
+
+## Test tooling
+pytest==9.1.1

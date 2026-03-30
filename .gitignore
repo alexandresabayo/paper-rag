@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+
+# Env
+.env
+backend/.env
+
+# Storage (runtime data - never commit ingested PDFs or the DB)
+backend/storage/*.sqlite3
+backend/storage/*.sqlite3-wal
+backend/storage/*.sqlite3-shm
+backend/storage/pdfs/*
+!backend/storage/pdfs/.gitkeep
+
+# Editors / OS
+.DS_Store
+.vscode/
+.idea/
