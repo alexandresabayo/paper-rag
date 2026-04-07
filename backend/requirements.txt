@@ -10,6 +10,7 @@ pyyaml==6.0.3
 lingua-language-detector==2.2.0
 httpx==0.28.1
 pymupdf==1.28.0
+pypdf==6.14.2
 
 ## Test tooling
 pytest==9.1.1
