@@ -52,6 +52,13 @@ def create_pages(conn: sqlite3.Connection, *, document_id: str, total_pages: int
     )
 
 
+def get_document_rowid(conn: sqlite3.Connection, document_id: str) -> int:
+    row = conn.execute("SELECT rowid AS rowid_ FROM documents WHERE id = ?", (document_id,)).fetchone()
+    if row is None:
+        raise KeyError(f"No document with id {document_id!r}")
+    return row["rowid_"]
+
+
 def get_document(conn: sqlite3.Connection, document_id: str) -> dict[str, Any] | None:
     row = conn.execute("SELECT * FROM documents WHERE id = ?", (document_id,)).fetchone()
     return dict(row) if row else None
@@ -116,6 +123,13 @@ def set_document_metadata(
 # ---------------------------------------------------------------------
 # Pages
 # ---------------------------------------------------------------------
+
+
+def get_page_rowid(conn: sqlite3.Connection, page_id: str) -> int:
+    row = conn.execute("SELECT rowid AS rowid_ FROM pages WHERE id = ?", (page_id,)).fetchone()
+    if row is None:
+        raise KeyError(f"No page with id {page_id!r}")
+    return row["rowid_"]
 
 
 def get_page(conn: sqlite3.Connection, document_id: str, page_number: int) -> dict[str, Any] | None:
