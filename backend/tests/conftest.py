@@ -35,6 +35,10 @@ def tmp_workspace(monkeypatch):
 
     init_db()
 
+    from app.pipeline.huey_app import huey
+
+    huey.immediate = True
+
     yield workdir
 
     shutil.rmtree(workdir, ignore_errors=True)
