@@ -34,7 +34,9 @@ def upsert_vector(conn: sqlite3.Connection, table: str, rowid: int, vector: list
     blob = _pack(vector)
     try:
         conn.execute(f"INSERT INTO {table}(rowid, embedding) VALUES (?, ?)", (rowid, blob))
-    except sqlite3.IntegrityError:
+    except (sqlite3.IntegrityError, sqlite3.OperationalError) as exc:
+        if "unique constraint failed" not in str(exc).lower():
+            raise
         conn.execute(f"UPDATE {table} SET embedding = ? WHERE rowid = ?", (blob, rowid))
 
 
