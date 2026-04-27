@@ -72,13 +72,15 @@ async def upload_documents(files: Annotated[list[UploadFile], File(...)]) -> lis
                 total_pages=total_pages,
             )
             documents_repo.create_pages(conn, document_id=document_id, total_pages=total_pages)
-            row = documents_repo.list_documents(conn)
-        doc_row = next(r for r in row if r["id"] == document_id)
+            pre_ingest_status = documents_repo.get_document(conn, document_id)["status"]
 
         enqueued = False
-        if doc_row["status"] in ("pending", "failed"):
+        if pre_ingest_status in ("pending", "failed"):
             ingest_document_task(document_id)
             enqueued = True
+
+        with session() as conn:
+            doc_row = next(r for r in documents_repo.list_documents(conn) if r["id"] == document_id)
 
         results.append(UploadResult(document=DocumentSummary.from_row(doc_row), enqueued=enqueued))
 
