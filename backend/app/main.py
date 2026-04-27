@@ -10,6 +10,8 @@ Run with: `uvicorn app.main:app --reload` (see README.md).
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -17,7 +19,14 @@ from app.config import settings
 from app.database import init_db
 from app.routers import ingestion, research
 
-app = FastAPI(title="Paper RAG", version="0.1.0")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    init_db()
+    yield
+
+
+app = FastAPI(title="Paper RAG", version="0.1.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -29,11 +38,6 @@ app.add_middleware(
 
 app.include_router(research.router)
 app.include_router(ingestion.router)
-
-
-@app.on_event("startup")
-def on_startup() -> None:
-    init_db()
 
 
 @app.get("/api/health")
