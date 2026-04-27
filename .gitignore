@@ -15,6 +15,10 @@ backend/storage/*.sqlite3-shm
 backend/storage/pdfs/*
 !backend/storage/pdfs/.gitkeep
 
+# Node / frontend
+frontend/node_modules/
+frontend/dist/
+
 # Editors / OS
 .DS_Store
 .vscode/
