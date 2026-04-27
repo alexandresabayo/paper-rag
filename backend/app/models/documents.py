@@ -70,10 +70,10 @@ def list_documents(conn: sqlite3.Connection) -> list[dict[str, Any]]:
         SELECT
             d.*,
             COUNT(p.id) AS total_page_rows,
-            SUM(CASE WHEN p.processing_status = 'done' THEN 1 ELSE 0 END) AS pages_done,
-            SUM(CASE WHEN p.processing_status = 'failed' THEN 1 ELSE 0 END) AS pages_failed,
-            SUM(CASE WHEN p.extractor_used = 'fallback' THEN 1 ELSE 0 END) AS pages_used_fallback,
-            SUM(CASE WHEN p.content_text_fixed = 1 THEN 1 ELSE 0 END) AS pages_with_encoding_fixes
+            COALESCE(SUM(CASE WHEN p.processing_status = 'done' THEN 1 ELSE 0 END), 0) AS pages_done,
+            COALESCE(SUM(CASE WHEN p.processing_status = 'failed' THEN 1 ELSE 0 END), 0) AS pages_failed,
+            COALESCE(SUM(CASE WHEN p.extractor_used = 'fallback' THEN 1 ELSE 0 END), 0) AS pages_used_fallback,
+            COALESCE(SUM(CASE WHEN p.content_text_fixed = 1 THEN 1 ELSE 0 END), 0) AS pages_with_encoding_fixes
         FROM documents d
         LEFT JOIN pages p ON p.document_id = d.id
         GROUP BY d.id

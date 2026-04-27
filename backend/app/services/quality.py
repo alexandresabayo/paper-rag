@@ -21,11 +21,11 @@ def generate_quality_report(conn: sqlite3.Connection) -> dict[str, Any]:
         """
         SELECT
             COUNT(*) AS total_documents,
-            SUM(CASE WHEN status = 'done' THEN 1 ELSE 0 END) AS documents_done,
-            SUM(CASE WHEN status = 'processing' THEN 1 ELSE 0 END) AS documents_processing,
-            SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS documents_failed,
-            SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) AS documents_pending,
-            SUM(CASE WHEN metadata_status = 'na' THEN 1 ELSE 0 END) AS documents_with_na_metadata
+            COALESCE(SUM(CASE WHEN status = 'done' THEN 1 ELSE 0 END), 0) AS documents_done,
+            COALESCE(SUM(CASE WHEN status = 'processing' THEN 1 ELSE 0 END), 0) AS documents_processing,
+            COALESCE(SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END), 0) AS documents_failed,
+            COALESCE(SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END), 0) AS documents_pending,
+            COALESCE(SUM(CASE WHEN metadata_status = 'na' THEN 1 ELSE 0 END), 0) AS documents_with_na_metadata
         FROM documents
         """
     ).fetchone()
@@ -34,11 +34,11 @@ def generate_quality_report(conn: sqlite3.Connection) -> dict[str, Any]:
         """
         SELECT
             COUNT(*) AS total_pages,
-            SUM(CASE WHEN processing_status = 'failed' THEN 1 ELSE 0 END) AS pages_failed,
-            SUM(CASE WHEN extractor_used = 'fallback' THEN 1 ELSE 0 END) AS pages_used_fallback,
-            SUM(CASE WHEN content_text_fixed = 1 THEN 1 ELSE 0 END) AS pages_with_encoding_fixes,
-            SUM(CASE WHEN is_short_page = 1 THEN 1 ELSE 0 END) AS pages_short,
-            SUM(CASE WHEN content_text IS NULL OR content_text = '' THEN 1 ELSE 0 END) AS pages_missing_content
+            COALESCE(SUM(CASE WHEN processing_status = 'failed' THEN 1 ELSE 0 END), 0) AS pages_failed,
+            COALESCE(SUM(CASE WHEN extractor_used = 'fallback' THEN 1 ELSE 0 END), 0) AS pages_used_fallback,
+            COALESCE(SUM(CASE WHEN content_text_fixed = 1 THEN 1 ELSE 0 END), 0) AS pages_with_encoding_fixes,
+            COALESCE(SUM(CASE WHEN is_short_page = 1 THEN 1 ELSE 0 END), 0) AS pages_short,
+            COALESCE(SUM(CASE WHEN content_text IS NULL OR content_text = '' THEN 1 ELSE 0 END), 0) AS pages_missing_content
         FROM pages
         """
     ).fetchone()
