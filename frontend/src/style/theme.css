@@ -1,0 +1,112 @@
+/*
+  Design tokens — PRD "Design" section.
+
+  Dark, editorial register: warm dark rather than pure black, one muted
+  accent used sparingly, everything else a narrow range of warm greys.
+  Research and Ingestion share every token below; Ingestion is simply
+  allowed more structural chrome (tables, badges, forms) on top of it.
+*/
+
+:root {
+  /* Surfaces */
+  --bg: #1f1f1e;
+  --bg-raised: #262624; /* sidebar, panels */
+  --bg-sunken: #191918; /* input bar, wells */
+  --bg-hover: rgba(242, 236, 227, 0.045);
+
+  /* Text */
+  --text: #f2ece3; /* warm off-white */
+  --text-muted: #a39c8f; /* captions, similarity scores, timestamps */
+  --text-faint: #6e685e; /* placeholders, disabled */
+
+  /* Accent — single warm cerulean/azure, used sparingly */
+  --accent: #4fa6c4;
+  --accent-strong: #6bb8d2;
+  --accent-dim: rgba(79, 166, 196, 0.14);
+  --accent-dim-strong: rgba(79, 166, 196, 0.28);
+
+  /* Status (kept desaturated / within the warm palette, never a jarring pure hue) */
+  --status-done: #7fa86b;
+  --status-failed: #c4664f;
+  --status-pending: #a39c8f;
+
+  /* Structure */
+  --divider: rgba(242, 236, 227, 0.08);
+  --divider-strong: rgba(242, 236, 227, 0.14);
+  --radius-sm: 4px;
+  --radius-md: 8px;
+
+  /* Type */
+  --font-serif: "Source Serif 4", Georgia, "Times New Roman", serif;
+  --font-sans: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 48px;
+  --space-8: 64px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+::selection {
+  background: var(--accent-dim-strong);
+  color: var(--text);
+}
+
+/* Visible keyboard focus everywhere, no exceptions - quality floor. */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+a {
+  color: var(--accent);
+}
+
+button {
+  font-family: inherit;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--divider-strong);
+  border-radius: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
