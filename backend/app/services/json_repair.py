@@ -36,8 +36,8 @@ def _remove_trailing_commas(text: str) -> str:
 
 
 def _quote_unquoted_keys(text: str) -> str:
-    # foo: "bar"  ->  "foo": "bar"   (only for keys that aren't already quoted)
-    return re.sub(r"(?<=[{,]\s)([A-Za-z_][A-Za-z0-9_]*)\s*:", r'"\1":', text)
+    # {foo: "bar"  ->  {"foo": "bar"   (only for keys that aren't already quoted)
+    return re.sub(r"([{,]\s*)([A-Za-z_][A-Za-z0-9_]*)(\s*:)", r'\1"\2"\3', text)
 
 
 def repair_json(raw_text: str) -> dict[str, Any]:
