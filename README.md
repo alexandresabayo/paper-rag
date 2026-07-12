@@ -13,10 +13,10 @@ Two route areas in one Vue app, one FastAPI backend:
 
 ### Requirements
 
-* **conda** ([download Miniforge3](https://github.com/conda-forge/miniforge)) to create and manage the Python environment.
-* **npm** ([download Node.js](https://nodejs.org/en/download)) to install dependencies and run the frontend.
-* **A model serving solution**: any OpenAI-compatible endpoint, local (Ollama, vLLM) or remote (Mistral, OpenAI, etc.).
-* **A configured GPU** is required to run local models.
+* **conda** ([download Miniforge3](https://github.com/conda-forge/miniforge)) to create and manage the Python environment
+* **npm** ([download Node.js](https://nodejs.org/en/download)) to install dependencies and run the frontend
+* **Any OpenAI-compatible endpoint**, local (Ollama, vLLM) or remote (Mistral, OpenAI, etc.)
+* **A configured GPU** to run local models
 
 ### Quick start
 
@@ -28,10 +28,10 @@ make dev       # Start the backend (:8000) and frontend (:5173)
 ```
 
 The DB is created automatically on first startup at
-`backend/storage/paper_rag.sqlite3`. The ingestion worker must stay at
-exactly one; see `app/pipeline/huey_app.py` for why. Without this running,
-uploaded documents will sit at `status: "pending"` forever, the API
-enqueues ingestion, it doesn't do it inline.
+`backend/storage/paper_rag.sqlite3`. Only run a single ingestion worker
+(exactly one instance); see `app/pipeline/huey_app.py` for why. Without
+this running, uploaded documents will sit at `status: "pending"` forever.
+The API enqueues ingestion; it doesn't run it inline.
 
 Run the test suite:
 
