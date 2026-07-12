@@ -23,3 +23,8 @@ frontend/dist/
 .DS_Store
 .vscode/
 .idea/
+
+# Coding agents
+CONTEXT.md
+AGENTS.md
+CLAUDE.md
