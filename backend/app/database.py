@@ -34,7 +34,10 @@ def get_connection(db_path: Path | str | None = None) -> sqlite3.Connection:
     """Open a new connection. Callers are responsible for closing it (or use
     `session()` below as a context manager)."""
     path = str(db_path or settings.DB_PATH)
-    conn = sqlite3.connect(path)
+    # check_same_thread=False: FastAPI runs sync dependencies (like get_db) via
+    # anyio's threadpool, so a connection opened on thread A and closed on thread
+    # B would raise sqlite3.ProgrammingError. This relaxes SQLite's thread affinity.
+    conn = sqlite3.connect(path, check_same_thread=False)
     _configure(conn)
     return conn
 
