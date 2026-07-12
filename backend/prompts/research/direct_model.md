@@ -1,5 +1,4 @@
 ---
-model: mistral-small
 temperature: 0.5
 schema:
   type: object

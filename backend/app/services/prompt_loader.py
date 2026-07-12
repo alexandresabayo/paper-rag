@@ -3,13 +3,17 @@ Prompt loader — PRD Section 9.
 
 Every LLM/VLM call site loads its prompt from a versioned `.md` file under
 `prompts/`, never an inline string. Each file pairs a Jinja2 template body
-with YAML frontmatter declaring `model`, `temperature`, and (optionally)
-`schema` — the JSON schema passed straight to Ollama's structured-output
-`format` parameter.
+with YAML frontmatter declaring `temperature` and (optionally) `schema` —
+the JSON schema passed straight to the configured provider's
+structured-output request.
 
-Call sites request a prompt **by name** (e.g. `"ingestion/page_summary"`)
-and pass template variables; they never touch prompt text directly. This
-is the "thin loader" described in Section 9.
+`model` is deliberately *not* declared here: a prompt is provider-agnostic
+by design, and which model actually serves it is a runtime choice
+(`ocr_settings.model` / `generation_settings.model`, see
+app/config.py) — not a property of the prompt text. Call sites request a
+prompt **by name** (e.g. `"ingestion/page_summary"`) and pass template
+variables; they never touch prompt text directly. This is the "thin
+loader" described in Section 9.
 """
 
 from __future__ import annotations
@@ -32,7 +36,6 @@ _jinja_env = Environment(undefined=StrictUndefined, trim_blocks=True, lstrip_blo
 @dataclass(frozen=True)
 class PromptSpec:
     name: str
-    model: str
     temperature: float
     schema: dict[str, Any] | None
     template_source: str
@@ -77,13 +80,12 @@ def _load_spec(name: str) -> PromptSpec:
 
     frontmatter, body = _split_frontmatter(path.read_text(encoding="utf-8"))
 
-    missing = {"model", "temperature"} - frontmatter.keys()
+    missing = {"temperature"} - frontmatter.keys()
     if missing:
         raise PromptFormatError(f"{path} frontmatter missing required key(s): {sorted(missing)}")
 
     return PromptSpec(
         name=name,
-        model=frontmatter["model"],
         temperature=float(frontmatter["temperature"]),
         schema=frontmatter.get("schema"),
         template_source=body,

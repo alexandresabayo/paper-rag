@@ -1,21 +1,27 @@
 """
-Generation providers — PRD Section 5 (`Mistral Small`/`Large 3`, served
-through Ollama) and Section 9 (schema-constrained structured output, with
-`json_repair` as the documented fallback for genuine edge cases).
+Generation provider — role-scoped, OpenAI-SDK based (see
+app/providers/model_client.py and `generation_settings` in app/config.py).
+Section 9 (schema-constrained structured output, with `json_repair` as the
+documented fallback for genuine edge cases).
 
 Every prompt file under prompts/ declares a `schema` in its frontmatter
-(app/services/prompt_loader.py), so `generate()` always returns a parsed
-`dict` matching that schema's top-level properties — callers never handle
-raw text.
+(app/services/prompt_loader.py). `model` no longer lives in the prompt
+file — it's resolved from `generation_settings.model` once, when the
+provider is constructed (see `get_generation_provider()` / callers in
+app/services/llm_call.py), so the same prompt can be pointed at any
+generation-role provider without editing it.
 """
 
 from __future__ import annotations
 
 import hashlib
+import json
 from typing import Any, Protocol
 
-from app.config import settings
-from app.providers.ollama_client import OllamaClient
+import openai
+
+from app.config import ConfigError, generation_settings, settings
+from app.providers.model_client import get_client
 from app.services import json_repair
 
 # Field names that hold the "main content" of a response, worth a slightly
@@ -24,31 +30,66 @@ from app.services import json_repair
 _PROSE_FIELD_NAMES = {"answer", "summary", "running_summary", "text"}
 
 
-class GenerationProvider(Protocol):
-    def generate(self, *, prompt: str, model: str, temperature: float, schema: dict[str, Any]) -> dict[str, Any]: ...
+class GenerationProviderProtocol(Protocol):
+    def generate(self, *, prompt: str, temperature: float, schema: dict[str, Any]) -> dict[str, Any]: ...
 
 
-class OllamaGenerationProvider:
-    """Real implementation. Not exercised against a live server in this
-    environment — see AGENT_TASKS.md."""
+class GenerationProvider:
+    """Real implementation against this role's configured
+    OpenAI-compatible `/v1/chat/completions` endpoint. Constructed with
+    its own client + model, injected from `generation_settings` — never
+    shared with the OCR or embedding roles' clients, and symmetrical with
+    `VisionProvider`/`EmbeddingProvider`, which bind their model the same
+    way.
 
-    def __init__(self, client: OllamaClient | None = None):
-        self._client = client or OllamaClient()
+    Requests the strictest structured-output mode the OpenAI SDK exposes
+    (`response_format={"type": "json_schema", ...}`) and falls back to
+    the looser `{"type": "json_object"}` mode on a 400 — not every
+    OpenAI-compatible server (vLLM, Ollama's compat layer, ...) supports
+    the newer json_schema mode yet. `json_repair` remains the
+    last-resort net for whatever gets through malformed either way
+    (Section 3/9).
 
-    def generate(self, *, prompt: str, model: str, temperature: float, schema: dict[str, Any]) -> dict[str, Any]:
-        raw = self._client.generate(
-            model=model,
-            prompt=prompt,
-            json_schema=schema,
-            temperature=temperature,
-        )
+    Not exercised against a live server in this environment — see
+    AGENT_TASKS.md.
+    """
+
+    def __init__(self, client: openai.OpenAI, model: str):
+        self._client = client
+        self._model = model
+
+    def generate(self, *, prompt: str, temperature: float, schema: dict[str, Any]) -> dict[str, Any]:
+        messages = [{"role": "user", "content": prompt}]
         try:
-            import json
+            response = self._client.chat.completions.create(
+                model=self._model,
+                messages=messages,
+                temperature=temperature,
+                response_format={
+                    "type": "json_schema",
+                    "json_schema": {"name": "response", "schema": schema, "strict": True},
+                },
+            )
+        except openai.BadRequestError:
+            try:
+                response = self._client.chat.completions.create(
+                    model=self._model,
+                    messages=messages,
+                    temperature=temperature,
+                    response_format={"type": "json_object"},
+                )
+            except openai.OpenAIError as exc:
+                raise ConfigError(f"Generation call failed for model={self._model!r}: {exc}") from exc
+        except openai.OpenAIError as exc:
+            raise ConfigError(f"Generation call failed for model={self._model!r}: {exc}") from exc
 
+        raw = response.choices[0].message.content or ""
+        try:
             return json.loads(raw)
         except (ValueError, TypeError):
-            # Ollama's JSON-mode should make this rare — Section 9 keeps
-            # json_repair around for exactly this "genuine edge case".
+            # Structured-output modes should make this rare — Section 9
+            # keeps json_repair around for exactly this "genuine edge
+            # case".
             return json_repair.repair_json(raw)
 
 
@@ -57,9 +98,10 @@ class MockGenerationProvider:
     and fills in deterministic, structurally-valid placeholder values, so
     every call site (metadata, page summary, keywords, doc-summary fold,
     research answers) gets a shape-correct response without a running
-    model."""
+    model. Takes no constructor arguments — a mock has no real model to
+    bind, unlike `GenerationProvider`."""
 
-    def generate(self, *, prompt: str, model: str, temperature: float, schema: dict[str, Any]) -> dict[str, Any]:
+    def generate(self, *, prompt: str, temperature: float, schema: dict[str, Any]) -> dict[str, Any]:
         seed = hashlib.sha256(prompt.encode("utf-8")).hexdigest()[:10]
         return self._fill(schema, seed=seed, prompt_excerpt=prompt[:160])
 
@@ -96,7 +138,11 @@ class MockGenerationProvider:
         return None
 
 
-def get_generation_provider() -> GenerationProvider:
+def get_generation_provider() -> GenerationProviderProtocol:
     if settings.MOCK_MODE:
         return MockGenerationProvider()
-    return OllamaGenerationProvider()
+    if not generation_settings.base_url or not generation_settings.model:
+        raise ConfigError(
+            "MOCK_MODE is False but GENERATION_BASE_URL/GENERATION_MODEL are not set — see .env.example."
+        )
+    return GenerationProvider(client=get_client(generation_settings), model=generation_settings.model)

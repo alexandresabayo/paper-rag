@@ -3,8 +3,27 @@ Central configuration for Paper RAG's backend.
 
 Everything here is overridable via environment variables (or a `.env` file —
 see `.env.example` at the repo root). Defaults are chosen so the app runs
-out of the box in MOCK_MODE, without a GPU or Ollama installed, per the
+out of the box in MOCK_MODE, without a GPU or any inference server, per the
 notes in README.md and AGENT_TASKS.md.
+
+Every self-hosted or hosted model role (OCR/vision, generation, embedding)
+gets its own independent `ProviderSettings` instance below
+(`ocr_settings` / `generation_settings` / `embedding_settings`), each
+reading its own `<ROLE>_BASE_URL` / `<ROLE>_API_KEY` / `<ROLE>_MODEL` /
+`<ROLE>_TIMEOUT_SECONDS` env vars via pydantic-settings' per-instance
+`_env_prefix` override — nothing is shared or defaulted across roles,
+since each commonly points at a different host, key, or provider (Ollama,
+vLLM, OpenAI, Mistral, ...). See app/providers/model_client.py.
+
+These are deliberately three separate `BaseSettings` instances rather than
+one `Settings` field of nested `ProviderSettings` with
+`env_nested_delimiter="_"` — the latter looks natural but doesn't work:
+pydantic-settings' nested-delimiter matching splits an env var on *every*
+underscore, so `OCR_BASE_URL` parses as three segments (`OCR`, `BASE`,
+`URL`) instead of two (`OCR`, `BASE_URL`) and silently fails to populate
+`base_url`. Giving each role its own `BaseSettings` subclass instance with
+its own `_env_prefix` sidesteps that ambiguity entirely rather than working
+around it (confirmed against pydantic-settings==2.14.2).
 """
 
 from __future__ import annotations
@@ -13,69 +32,97 @@ from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-# backend/app/config.py -> backend/
 BACKEND_DIR = Path(__file__).resolve().parent.parent
 REPO_ROOT = BACKEND_DIR.parent
 
 
-class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+class ConfigError(RuntimeError):
+    """Raised when a role's runtime configuration turns out to be
+    insufficient to make a real (non-mocked) call - e.g. MOCK_MODE=False
+    with no OCR_BASE_URL/OCR_MODEL set, an OpenAI-compatible call failing
+    outright, or a configured EMBEDDING_DIM that the provider's actual
+    response doesn't match (see embedding_service.py)."""
 
-    # --- Runtime mode -------------------------------------------------
-    # MOCK_MODE=True routes every AI call (OCR/VLM, embeddings, generation)
-    # through the deterministic mock providers in app/providers so the
-    # whole app (API, pipeline, DB, retrieval, scenario classification)
-    # is runnable and testable without a GPU or Ollama installed.
-    # Flip to False once Ollama is running with the real models pulled
-    # (see README.md "Going from mock to real models").
+
+class ProviderSettings(BaseSettings):
+    """One inference role's connection details.
+
+    `base_url`/`model` default to `None` rather than being required so
+    that construction succeeds with zero configuration in MOCK_MODE (the
+    out-of-the-box default, and what the test suite always forces) - the
+    `get_*_provider()` factories in each `*_service.py` are the ones that
+    insist these are actually set, and only when building a real,
+    non-mock provider.
+
+    Every field here also independently supports `.env`/env var
+    overrides (see `model_config`) - the concrete, role-scoped instances
+    below (`ocr_settings` etc.) are what supply the `_env_prefix` that
+    makes e.g. `OCR_BASE_URL` land on `ocr_settings.base_url`.
+    """
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        env_ignore_empty=True,
+        extra="ignore",
+    )
+
+    base_url: str | None = None
+    api_key: str = "not-needed"  # most self-hosted OpenAI-compatible
+                                  # servers (Ollama, vLLM, TEI) ignore
+                                  # auth, but the OpenAI SDK requires a
+                                  # non-empty string
+    model: str | None = None
+    timeout_seconds: float = 120.0
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        env_ignore_empty=True,
+        extra="ignore",
+    )
+
     MOCK_MODE: bool = True
 
-    # --- Storage --------------------------------------------------------
     DB_PATH: Path = BACKEND_DIR / "storage" / "paper_rag.sqlite3"
     HUEY_DB_PATH: Path = BACKEND_DIR / "storage" / "huey.sqlite3"
     PDF_STORAGE_DIR: Path = BACKEND_DIR / "storage" / "pdfs"
     PROMPTS_DIR: Path = BACKEND_DIR / "prompts"
 
-    # --- Ollama-served models (section 5 of the PRD) --------------------
-    OLLAMA_BASE_URL: str = "http://localhost:11434"
-    OLLAMA_TIMEOUT_SECONDS: float = 120.0
+    # Optional. An assertion/truncation request for the embedding role,
+    # not a schema requirement - see the "Embedding dimension handling"
+    # docstring on EmbeddingProvider.embed() in embedding_service.py. Has
+    # no bearing on vec0 table creation any more (see database.py -
+    # ensure_vector_schema() sizes columns from a real vector's length,
+    # not from this setting).
+    EMBEDDING_DIM: int | None = None
 
-    # Model tags as pulled into Ollama. These are placeholders — see
-    # AGENT_TASKS.md for pulling/serving the real olmOCR / Mistral / BGE-M3
-    # weights under Ollama.
-    OCR_MODEL: str = "olmocr"
-    GENERATION_MODEL: str = "mistral-small"
-    EMBEDDING_MODEL: str = "bge-m3"
-    EMBEDDING_DIM: int = 1024
+    METADATA_SOURCE_PAGE_COUNT: int = 3
+    SHORT_PAGE_SENTENCE_THRESHOLD: int = 5
 
-    # --- Ingestion pipeline tuning ---------------------------------------
-    METADATA_SOURCE_PAGE_COUNT: int = 3  # first N pages combined for metadata (2.A #2)
-    SHORT_PAGE_SENTENCE_THRESHOLD: int = 5  # below this, skip summary/keywords (Section 3)
-
-    # --- Retrieval (2.B #1, #2, #6 + Section 3 "Precision Re-ranking") ---
     RETRIEVAL_TOP_K: int = 8
-    # Weights across the three page-level embedding sources when combining
-    # scores. Kept in config rather than a DB table for v1 — see AGENT_TASKS
-    # if this needs to become admin-editable at runtime.
     EMBEDDING_WEIGHT_CONTENT: float = 0.50
     EMBEDDING_WEIGHT_SUMMARY: float = 0.35
     EMBEDDING_WEIGHT_KEYWORDS: float = 0.15
 
-    # Scenario classification thresholds on the combined cosine similarity
-    # of the top hit (2.B #2). "Dynamic thresholding" per PRD Section 3 is
-    # approximated here with configurable static cutoffs — see AGENT_TASKS
-    # for turning this into a corpus-calibrated / gap-based scheme.
-    SCENARIO_HIGH_THRESHOLD: float = 0.75  # >= this -> database_only
-    SCENARIO_MID_THRESHOLD: float = 0.55  # >= this -> hybrid
-    SCENARIO_LOW_THRESHOLD: float = 0.35  # >= this -> model_first; below -> model_only
+    SCENARIO_HIGH_THRESHOLD: float = 0.75
+    SCENARIO_MID_THRESHOLD: float = 0.55
+    SCENARIO_LOW_THRESHOLD: float = 0.35
 
-    # --- CORS (dev) -------------------------------------------------------
     CORS_ORIGINS: list[str] = ["http://localhost:5173", "http://127.0.0.1:5173"]
 
 
 settings = Settings()
 
-# Make sure storage directories exist at import time — keeps first-run friction low.
+# One independently-configured ProviderSettings per model role - see the
+# module docstring for why these are separate instances (with their own
+# `_env_prefix`) rather than nested fields on `Settings`.
+ocr_settings = ProviderSettings(_env_prefix="OCR_")
+generation_settings = ProviderSettings(_env_prefix="GENERATION_")
+embedding_settings = ProviderSettings(_env_prefix="EMBEDDING_")
+
 settings.PDF_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
 settings.DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 settings.HUEY_DB_PATH.parent.mkdir(parents=True, exist_ok=True)

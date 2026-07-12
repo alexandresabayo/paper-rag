@@ -1,5 +1,4 @@
 ---
-model: olmocr
 temperature: 0.0
 schema:
   type: object

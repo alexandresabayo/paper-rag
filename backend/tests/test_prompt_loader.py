@@ -7,7 +7,6 @@ from app.services.prompt_loader import PromptFormatError, PromptNotFoundError, g
 
 def test_loads_frontmatter_and_body():
     spec = get_prompt("ingestion/page_summary")
-    assert spec.model == "mistral-small"
     assert 0 <= spec.temperature <= 1
     assert spec.schema is not None
     assert "summary" in spec.schema["properties"]
@@ -43,5 +42,4 @@ def test_all_shipped_prompts_parse():
     ]
     for name in names:
         spec = get_prompt(name)
-        assert spec.model
         assert spec.schema is not None, f"{name} should declare a schema"
