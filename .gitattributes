@@ -1,0 +1,15 @@
+# Language stats
+Makefile linguist-detectable=false
+*.css linguist-detectable=false
+*.html linguist-detectable=false
+*.js linguist-language=Vue
+
+# Line endings
+* text=auto eol=lf
+
+# Binary files
+*.png binary
+*.svg binary
+
+# Lock file
+package-lock.json merge=theirs
