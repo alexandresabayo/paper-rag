@@ -1,5 +1,6 @@
 ## Core — required to run the API, pipeline, and tests in MOCK_MODE
-## (no GPU / Ollama needed). This is everything you need for local dev.
+## (no GPU / inference server needed). This is everything you need for
+## local dev.
 fastapi==0.139.0
 uvicorn[standard]==0.50.2
 pydantic==2.13.4
@@ -10,7 +11,7 @@ pypdf==6.14.2
 pymupdf==1.28.0
 jinja2==3.1.6
 pyyaml==6.0.3
-httpx==0.28.1
+openai==2.45.0
 python-multipart==0.0.32
 lingua-language-detector==2.2.0
 
@@ -21,9 +22,8 @@ pytest==9.1.1
 ## Production model-serving path (MOCK_MODE=False)
 ## --------------------------------------------------------------------
 ## Nothing extra to `pip install` for OCR/embeddings/generation themselves
-## — those are served by Ollama as an external process (see README.md
-## "Going from mock to real models"), and this app only talks to Ollama
-## over HTTP (already covered by httpx above). Install Ollama separately:
-## https://ollama.com — then pull the OCR/generation/embedding models
-## referenced in app/config.py (OCR_MODEL, GENERATION_MODEL,
-## EMBEDDING_MODEL) and set MOCK_MODE=false in your .env.
+## — those are served by whatever OpenAI-compatible inference server(s)
+## you point each role at (Ollama, vLLM, TEI, OpenAI itself, ...) over
+## HTTP, via the `openai` package above. See README.md "Going from mock
+## to real models" and .env.example for the three independent
+## OCR_*/GENERATION_*/EMBEDDING_* settings.
