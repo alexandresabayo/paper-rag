@@ -1,7 +1,7 @@
 SHELL := /bin/bash
-CONDA_ACTIVATE := source ~/conda/etc/profile.d/conda.sh && conda activate paper-rag reset-db
+CONDA_ACTIVATE := source ~/conda/etc/profile.d/conda.sh && conda activate paper-rag 
 
-.PHONY: install dev-backend dev-worker dev-frontend dev test clean 
+.PHONY: install dev-backend dev-worker dev-frontend dev test clean reset
 
 install:
 	source ~/conda/etc/profile.d/conda.sh && conda create -n paper-rag python=3.12 -y
@@ -27,5 +27,5 @@ test:
 clean:
 	find . -name __pycache__ -o -name .pytest_cache | xargs rm -rf
 
-reset-db:
+reset:
 	rm -f backend/storage/paper_rag.sqlite3 backend/storage/paper_rag.sqlite3-wal backend/storage/paper_rag.sqlite3-shm
