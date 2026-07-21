@@ -4,12 +4,9 @@
 > Also currently only runs on the machine it was built on; actively working on that.
 
 <br>
-A self-hosted RAG system for a personal corpus of scientific PDFs, plus the pipeline dashboard that ingests them.
+A self-hosted RAG system for a personal corpus of scientific PDFs, plus the pipeline dashboard that ingests them.  
 
-Two route areas in one Vue app, one FastAPI backend:
-
-- **Research** (`/research`): the researcher-facing chat/query interface.
-- **Ingestion** (`/ingestion`): the single-admin pipeline dashboard.
+Two route areas in one Vue app, one FastAPI backend: **Research** (`/research`), the researcher-facing chat/query interface, and **Ingestion** (`/ingestion`), where the single admin brings papers into the corpus and tracks the pipeline.
 
 ### Requirements
 
