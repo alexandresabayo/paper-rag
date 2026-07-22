@@ -102,6 +102,28 @@ class Settings(BaseSettings):
     METADATA_SOURCE_PAGE_COUNT: int = 3
     SHORT_PAGE_SENTENCE_THRESHOLD: int = 5
 
+    # ISSUE-011 (AGENT_TASKS.md): config-driven upload limits. Neither
+    # existed before - anything, of any size or length, was accepted.
+    # 100 MB comfortably covers a dense, image-heavy scientific PDF
+    # without allowing an unbounded upload to fill disk or take an
+    # unreasonable amount of time to hash/store/page-count. 1000 pages
+    # covers even a large thesis/technical-report; a document longer than
+    # that is more likely a bulk/mis-scanned file than a single paper,
+    # and would take an impractical amount of single-GPU-worker time to
+    # ingest one page at a time regardless.
+    MAX_UPLOAD_FILE_SIZE_BYTES: int = 100 * 1024 * 1024
+    MAX_UPLOAD_PAGE_COUNT: int = 1000
+
+    # ISSUE-014 (AGENT_TASKS.md): bounds any single `_extract_page_text`/
+    # `run_prompt` call in the ingestion pipeline (app/pipeline/tasks.py)
+    # so a hung model call fails that step instead of blocking the
+    # single-worker queue forever - see `_run_with_timeout`'s docstring
+    # there. 5 minutes is well above AGENT_TASKS.md's own observed real
+    # OCR latency (~1-2 min/page under GPU contention, per ISSUE-006's
+    # notes) while still bounding a genuine hang to a human-noticeable,
+    # bounded wait rather than an indefinite one.
+    PAGE_PROCESSING_TIMEOUT_SECONDS: float = 300.0
+
     RETRIEVAL_TOP_K: int = 8
     EMBEDDING_WEIGHT_CONTENT: float = 0.50
     EMBEDDING_WEIGHT_SUMMARY: float = 0.35

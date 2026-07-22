@@ -21,6 +21,7 @@ before continuing forward (see `_rebuild_running_summary`).
 
 from __future__ import annotations
 
+import concurrent.futures
 import json
 import logging
 from pathlib import Path
@@ -43,6 +44,45 @@ from app.services.text_stats import count_sentences
 from app.services.vector_store import upsert_vector
 
 logger = logging.getLogger("paper_rag.pipeline")
+
+
+class PageProcessingTimeoutError(RuntimeError):
+    """Raised by `_run_with_timeout` when a single `_extract_page_text`/
+    `run_prompt` call exceeds `settings.PAGE_PROCESSING_TIMEOUT_SECONDS`
+    (ISSUE-014, AGENT_TASKS.md). A plain `RuntimeError` subclass (not a
+    bespoke base) so it's caught by every existing `except Exception`
+    handler in this module without any of them needing to know about it
+    specifically - a timeout should be handled exactly like any other
+    page-processing failure, just with a clearer message."""
+
+
+def _run_with_timeout(fn, *args, timeout_seconds: float, **kwargs):
+    """Runs `fn(*args, **kwargs)` on a worker thread and waits at most
+    `timeout_seconds` for it. A genuine Python-level "cancel this call"
+    doesn't exist for a blocking call (no `signal.alarm` here - this
+    pipeline's own callers may not be the main thread, e.g. under
+    FastAPI's sync-endpoint threadpool, and `signal.alarm` only works
+    from the main thread), so this is the standard workaround: the
+    calling code moves on (and, per the module docstring, marks the page
+    failed/retryable) even though the abandoned thread may keep running
+    in the background until the underlying HTTP call itself times out at
+    the `openai` client's own `timeout_seconds` (`app/config.py`'s
+    `ProviderSettings.timeout_seconds`) - that's an acceptable trade-off
+    for turning a hang into a bounded, retryable failure rather than
+    truly killing the in-flight call, which Python cannot do safely for
+    arbitrary blocking code.
+
+    Re-raises the original exception (unchanged) if `fn` itself raised
+    one; raises `PageProcessingTimeoutError` if it didn't finish in time.
+    """
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(fn, *args, **kwargs)
+        try:
+            return future.result(timeout=timeout_seconds)
+        except concurrent.futures.TimeoutError as exc:
+            raise PageProcessingTimeoutError(
+                f"{getattr(fn, '__qualname__', fn)} exceeded {timeout_seconds}s timeout"
+            ) from exc
 
 
 @huey.task()
@@ -99,8 +139,10 @@ def _rebuild_running_summary(document_id: str, resume_from: int) -> str | None:
 
     running_summary: str | None = None
     for page_number, page_summary in prior_summaries:
-        result = run_prompt(
+        result = _run_with_timeout(
+            run_prompt,
             "ingestion/doc_summary_fold",
+            timeout_seconds=settings.PAGE_PROCESSING_TIMEOUT_SECONDS,
             running_summary=running_summary,
             next_page_summary=page_summary,
             page_number=page_number,
@@ -157,7 +199,13 @@ def _maybe_extract_metadata(document_id: str) -> None:
             )
         return
 
-    result = run_prompt("ingestion/metadata_extract", combined_text=combined_text, page_count=len(source_pages))
+    result = _run_with_timeout(
+        run_prompt,
+        "ingestion/metadata_extract",
+        timeout_seconds=settings.PAGE_PROCESSING_TIMEOUT_SECONDS,
+        combined_text=combined_text,
+        page_count=len(source_pages),
+    )
     language = detect_language(combined_text)
 
     with session() as conn:
@@ -187,8 +235,10 @@ def _process_single_page(document_id: str, pdf_path: Path, page_number: int, run
         # Idempotent guard - see module docstring. Carry the existing
         # summary forward into the fold rather than reprocessing.
         if existing.get("page_summary"):
-            result = run_prompt(
+            result = _run_with_timeout(
+                run_prompt,
                 "ingestion/doc_summary_fold",
+                timeout_seconds=settings.PAGE_PROCESSING_TIMEOUT_SECONDS,
                 running_summary=running_summary,
                 next_page_summary=existing["page_summary"],
                 page_number=page_number,
@@ -201,7 +251,7 @@ def _process_single_page(document_id: str, pdf_path: Path, page_number: int, run
 
     try:
         raw_text, extractor_used = _extract_page_text(pdf_path, page_number)
-    except Exception as exc:  # noqa: BLE001 - both primary and fallback failed
+    except Exception as exc:  # noqa: BLE001 - both primary and fallback failed (including a timeout - see PageProcessingTimeoutError)
         with session() as conn:
             documents_repo.update_page_fields(
                 conn, page_id, processing_status="failed", error_message=str(exc)
@@ -218,10 +268,39 @@ def _process_single_page(document_id: str, pdf_path: Path, page_number: int, run
         if count_sentences(fixed_text) < settings.SHORT_PAGE_SENTENCE_THRESHOLD:
             is_short = True
         else:
-            page_summary = run_prompt(
-                "ingestion/page_summary", page_text=fixed_text, page_number=page_number, max_sentences=5
-            )["summary"]
-            keywords = run_prompt("ingestion/page_keywords", page_text=fixed_text, page_number=page_number)
+            # ISSUE-014 (AGENT_TASKS.md): unlike the extraction step above,
+            # these two run_prompt calls previously had no exception
+            # handling at all - a failure (or, before this fix, a hang)
+            # here would leave the page stuck at whatever partial DB
+            # state it already had (still "pending"), invisible as
+            # failed and not retryable via get_resume_page_number, which
+            # only resumes *forward* from the first non-done page - the
+            # exact "hang" this issue is about, just manifesting as a
+            # stuck page instead of a stuck process. Mirror the
+            # extraction step's pattern: mark the page failed and
+            # re-raise so it surfaces in the dashboard and is retryable.
+            try:
+                page_summary = _run_with_timeout(
+                    run_prompt,
+                    "ingestion/page_summary",
+                    timeout_seconds=settings.PAGE_PROCESSING_TIMEOUT_SECONDS,
+                    page_text=fixed_text,
+                    page_number=page_number,
+                    max_sentences=5,
+                )["summary"]
+                keywords = _run_with_timeout(
+                    run_prompt,
+                    "ingestion/page_keywords",
+                    timeout_seconds=settings.PAGE_PROCESSING_TIMEOUT_SECONDS,
+                    page_text=fixed_text,
+                    page_number=page_number,
+                )
+            except Exception as exc:  # noqa: BLE001 - summary/keywords generation failed or timed out
+                with session() as conn:
+                    documents_repo.update_page_fields(
+                        conn, page_id, processing_status="failed", error_message=str(exc)
+                    )
+                raise
 
     with session() as conn:
         documents_repo.update_page_fields(
@@ -252,8 +331,20 @@ def _process_single_page(document_id: str, pdf_path: Path, page_number: int, run
                 upsert_vector(conn, "page_keywords_vec", page_rowid, keywords_vec)
 
     if page_summary:
-        fold_result = run_prompt(
+        # Note: the page row above is already committed "done" by this
+        # point (real extracted content/summary/keywords/embeddings all
+        # saved) - if this fold call times out or fails, that failure
+        # propagates up to fail the *document* (run_ingestion's catch-
+        # all), not this page. That's intentional, not a gap: this page
+        # doesn't need to be redone on retry, and `_rebuild_running_summary`
+        # already re-folds every done page's summary from scratch on
+        # resume (see its docstring / the module docstring's "cache, not
+        # a checkpoint" note), so a retry correctly regenerates
+        # running_summary without reprocessing this page.
+        fold_result = _run_with_timeout(
+            run_prompt,
             "ingestion/doc_summary_fold",
+            timeout_seconds=settings.PAGE_PROCESSING_TIMEOUT_SECONDS,
             running_summary=running_summary,
             next_page_summary=page_summary,
             page_number=page_number,
@@ -270,15 +361,24 @@ def _extract_page_text(pdf_path: Path, page_number: int) -> tuple[str, str]:
     """Returns (text, extractor_used). Tries the VLM primary path first;
     only falls back to pypdf if the primary raises OCRExtractionError
     (PRD 2.A #1's "worst case" fallback). If the fallback *also* fails, the
-    exception propagates and the page is marked 'failed'."""
+    exception propagates and the page is marked 'failed'.
+
+    Each attempt gets its own full `PAGE_PROCESSING_TIMEOUT_SECONDS`
+    budget (ISSUE-014, AGENT_TASKS.md) rather than sharing one budget
+    across both - a slow-but-eventually-`OCRExtractionError`-raising
+    primary shouldn't eat into the fallback's own allowance."""
     primary = get_primary_ocr_provider()
     try:
-        result = primary.extract_page(pdf_path, page_number)
+        result = _run_with_timeout(
+            primary.extract_page, pdf_path, page_number, timeout_seconds=settings.PAGE_PROCESSING_TIMEOUT_SECONDS
+        )
         return result.text, "vlm"
     except OCRExtractionError:
         logger.warning("Primary OCR failed on page %s of %s - falling back to pypdf", page_number, pdf_path)
         fallback = get_fallback_ocr_provider()
-        result = fallback.extract_page(pdf_path, page_number)
+        result = _run_with_timeout(
+            fallback.extract_page, pdf_path, page_number, timeout_seconds=settings.PAGE_PROCESSING_TIMEOUT_SECONDS
+        )
         return result.text, "fallback"
 
 

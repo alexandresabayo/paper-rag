@@ -31,7 +31,12 @@ from app.schemas.ingestion import (
     UploadResult,
 )
 from app.services import quality
-from app.services.pdf_render import get_page_count
+from app.services.pdf_render import (
+    PDFCorruptedError,
+    PDFEmptyError,
+    PDFEncryptedError,
+    inspect_pdf_bytes,
+)
 from app.utils.hashing import compute_document_id
 
 router = APIRouter(prefix="/api/ingestion", tags=["ingestion"])
@@ -42,7 +47,19 @@ async def upload_documents(files: Annotated[list[UploadFile], File(...)]) -> lis
     """(c) Upload new PDFs directly to kick off ingestion. Accepts one or
     more files in a single multipart request (batch upload, PRD 2.A #8).
     Each file becomes its own document + Huey task; re-uploading the exact
-    same bytes is a no-op (content-addressed id, see hashing.py)."""
+    same bytes is a no-op (content-addressed id, see hashing.py).
+
+    Every file is fully validated (extension/content-type, size, PDF
+    structure, page count - ISSUE-010/ISSUE-011, AGENT_TASKS.md) *before*
+    anything is written to `PDF_STORAGE_DIR` or any DB row is created, so
+    a rejected file never touches storage. As before, the first invalid
+    file in a batch aborts the whole request (consistent with the
+    pre-existing non-PDF check below, not a new inconsistency introduced
+    here) rather than silently skipping it or returning a partial-success
+    shape the API didn't previously support.
+    """
+    from app.config import settings
+
     results: list[UploadResult] = []
 
     for upload in files:
@@ -52,16 +69,45 @@ async def upload_documents(files: Annotated[list[UploadFile], File(...)]) -> lis
             raise HTTPException(status_code=400, detail=f"{upload.filename!r} is not a PDF")
 
         file_bytes = await upload.read()
-        document_id = compute_document_id(file_bytes)
 
-        from app.config import settings
+        if len(file_bytes) > settings.MAX_UPLOAD_FILE_SIZE_BYTES:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"{upload.filename!r} is {len(file_bytes):,} bytes, "
+                    f"exceeding the {settings.MAX_UPLOAD_FILE_SIZE_BYTES:,}-byte limit"
+                ),
+            )
+
+        try:
+            total_pages = inspect_pdf_bytes(file_bytes)
+        except PDFEncryptedError:
+            raise HTTPException(
+                status_code=400,
+                detail=f"{upload.filename!r} is password-protected; encrypted PDFs are not supported",
+            )
+        except PDFEmptyError:
+            raise HTTPException(status_code=400, detail=f"{upload.filename!r} has zero pages")
+        except PDFCorruptedError as exc:
+            raise HTTPException(
+                status_code=400, detail=f"{upload.filename!r} could not be parsed as a PDF: {exc}"
+            )
+
+        if total_pages > settings.MAX_UPLOAD_PAGE_COUNT:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"{upload.filename!r} has {total_pages:,} pages, "
+                    f"exceeding the {settings.MAX_UPLOAD_PAGE_COUNT:,}-page limit"
+                ),
+            )
+
+        document_id = compute_document_id(file_bytes)
 
         pdf_path = settings.PDF_STORAGE_DIR / f"{document_id}.pdf"
         already_existed = pdf_path.exists()
         if not already_existed:
             pdf_path.write_bytes(file_bytes)
-
-        total_pages = get_page_count(pdf_path)
 
         with session() as conn:
             documents_repo.create_document(
