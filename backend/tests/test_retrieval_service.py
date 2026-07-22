@@ -129,3 +129,60 @@ def test_scenario_classification_thresholds():
     assert classify_scenario([hit(0.6)]) == "hybrid"
     assert classify_scenario([hit(0.4)]) == "model_first"
     assert classify_scenario([hit(0.1)]) == "model_only"
+
+
+def test_scenario_demoted_when_top_hit_has_no_clear_margin_over_runner_up():
+    """ISSUE-008 (AGENT_TASKS.md): a top score that clears the static
+    threshold but is essentially tied with the runner-up is weaker
+    evidence than the same top score with real separation - the dynamic
+    part of "dynamic thresholding" demotes one tier in that case."""
+    from app.services.retrieval_service import RetrievalHit, classify_scenario
+
+    def hit(score: float) -> RetrievalHit:
+        return RetrievalHit(document_id="d", document_title="t", page_number=1, similarity_score=score, snippet="s")
+
+    # 0.90 alone would be "database_only" (see test above), but a
+    # runner-up at 0.885 is within the default 0.05 margin threshold.
+    demoted = classify_scenario([hit(0.90), hit(0.885)])
+    assert demoted == "hybrid"
+
+    # Same top score, clear separation from the runner-up -> no demotion.
+    not_demoted = classify_scenario([hit(0.90), hit(0.60)])
+    assert not_demoted == "database_only"
+
+
+def test_scenario_demotion_never_pushes_past_model_only():
+    """A low top score with a tiny margin has nowhere lower to demote to
+    - must not raise or index out of range."""
+    from app.services.retrieval_service import RetrievalHit, classify_scenario
+
+    def hit(score: float) -> RetrievalHit:
+        return RetrievalHit(document_id="d", document_title="t", page_number=1, similarity_score=score, snippet="s")
+
+    assert classify_scenario([hit(0.10), hit(0.099)]) == "model_only"
+
+
+def test_scenario_margin_check_skipped_for_a_single_hit():
+    """With nothing to compare against, the base tier from the top score
+    alone stands - there's no "shape of the ranked list" to evaluate."""
+    from app.services.retrieval_service import RetrievalHit, classify_scenario
+
+    def hit(score: float) -> RetrievalHit:
+        return RetrievalHit(document_id="d", document_title="t", page_number=1, similarity_score=score, snippet="s")
+
+    assert classify_scenario([hit(0.90)]) == "database_only"
+
+
+def test_scenario_margin_threshold_is_configurable():
+    from app.config import settings
+    from app.services.retrieval_service import RetrievalHit, classify_scenario
+
+    def hit(score: float) -> RetrievalHit:
+        return RetrievalHit(document_id="d", document_title="t", page_number=1, similarity_score=score, snippet="s")
+
+    original = settings.SCENARIO_MARGIN_THRESHOLD
+    try:
+        settings.SCENARIO_MARGIN_THRESHOLD = 0.0  # effectively disables demotion
+        assert classify_scenario([hit(0.90), hit(0.899)]) == "database_only"
+    finally:
+        settings.SCENARIO_MARGIN_THRESHOLD = original

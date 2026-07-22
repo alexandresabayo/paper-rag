@@ -10,8 +10,11 @@ ranks highly on e.g. keyword-similarity alone still gets a chance to
 surface even if it wasn't in another source's raw top-k.
 
 Scenario classification (2.B #2) then looks at the *combined* top score
-against configurable thresholds. See app/config.py's docstring on
-`SCENARIO_*_THRESHOLD` for the "dynamic thresholding" caveat.
+against configurable thresholds (app/config.py's `SCENARIO_*_THRESHOLD`),
+plus one dynamic adjustment on top - see `classify_scenario` and
+`SCENARIO_MARGIN_THRESHOLD`'s docstring in app/config.py (ISSUE-008,
+AGENT_TASKS.md) for why a static top-score cutoff alone isn't "dynamic"
+and what's layered on top of it here.
 """
 
 from __future__ import annotations
@@ -25,6 +28,11 @@ from app.services.embedding_service import get_embedding_provider
 
 _CANDIDATE_MULTIPLIER = 4
 _MIN_CANDIDATES = 20
+
+# Ordered from highest to lowest retrieval confidence, so
+# classify_scenario's margin-based demotion can simply step one entry to
+# the right (never past the end - model_only has nowhere lower to go).
+_SCENARIO_TIERS = ("database_only", "hybrid", "model_first", "model_only")
 
 _SOURCE_TABLES_AND_WEIGHTS = (
     ("page_content_vec", "EMBEDDING_WEIGHT_CONTENT"),
@@ -97,14 +105,39 @@ def retrieve_pages(conn: sqlite3.Connection, query_text: str, top_k: int | None 
 
 
 def classify_scenario(hits: list[RetrievalHit]) -> str:
-    """One of 'database_only' | 'hybrid' | 'model_first' | 'model_only'."""
+    """One of 'database_only' | 'hybrid' | 'model_first' | 'model_only'.
+
+    Two passes (ISSUE-008, AGENT_TASKS.md):
+
+    1. Base tier from the top hit's absolute combined score against the
+       static `SCENARIO_*_THRESHOLD` cutoffs - unchanged from before.
+    2. Dynamic adjustment: if the top hit doesn't clear the runner-up by
+       at least `SCENARIO_MARGIN_THRESHOLD`, demote one tier. A high top
+       score that's basically tied with several other candidates is
+       weaker evidence of "this page specifically answers the question"
+       than the same top score with daylight between it and the rest of
+       the ranked list - the *shape* of the ranked list, not just its
+       highest value, is what makes this "dynamic" per query rather than
+       a single fixed cutoff. Only ever demotes, never promotes: a low
+       top score isn't rescued by a large gap under it, since the gap
+       alone says nothing about whether the top hit is any good.
+    """
     if not hits:
         return "model_only"
+
     top_score = hits[0].similarity_score
     if top_score >= settings.SCENARIO_HIGH_THRESHOLD:
-        return "database_only"
-    if top_score >= settings.SCENARIO_MID_THRESHOLD:
-        return "hybrid"
-    if top_score >= settings.SCENARIO_LOW_THRESHOLD:
-        return "model_first"
-    return "model_only"
+        tier_index = 0  # database_only
+    elif top_score >= settings.SCENARIO_MID_THRESHOLD:
+        tier_index = 1  # hybrid
+    elif top_score >= settings.SCENARIO_LOW_THRESHOLD:
+        tier_index = 2  # model_first
+    else:
+        tier_index = 3  # model_only
+
+    if tier_index < len(_SCENARIO_TIERS) - 1 and len(hits) > 1:
+        margin = top_score - hits[1].similarity_score
+        if margin < settings.SCENARIO_MARGIN_THRESHOLD:
+            tier_index += 1
+
+    return _SCENARIO_TIERS[tier_index]

@@ -107,9 +107,27 @@ class Settings(BaseSettings):
     EMBEDDING_WEIGHT_SUMMARY: float = 0.35
     EMBEDDING_WEIGHT_KEYWORDS: float = 0.15
 
+    # ISSUE-008 (AGENT_TASKS.md): the PRD's Section 3 says scenario
+    # classification uses "dynamic thresholding" but doesn't define what
+    # that means. These three absolute cutoffs on the combined top score
+    # are kept as the tunable *base* tier boundaries - a fixed, static
+    # thing by themselves, which is what "dynamic" can't just mean.
     SCENARIO_HIGH_THRESHOLD: float = 0.75
     SCENARIO_MID_THRESHOLD: float = 0.55
     SCENARIO_LOW_THRESHOLD: float = 0.35
+
+    # The genuinely dynamic part: a per-query adjustment based on the
+    # *shape* of the ranked list rather than the top score in isolation.
+    # If the top hit doesn't clear the runner-up by at least this much,
+    # the top score's absolute value doesn't necessarily mean the top
+    # page is distinctly more relevant than everything else retrieved -
+    # it may just mean every candidate scored similarly (e.g. a generic
+    # query, or a corpus with a lot of near-duplicate content), which is
+    # a weaker basis for "database_only" or "hybrid" confidence than the
+    # same top score with a clear runner-up gap. `classify_scenario`
+    # demotes one scenario tier (never promotes) when this margin is too
+    # small. See app/services/retrieval_service.py::classify_scenario.
+    SCENARIO_MARGIN_THRESHOLD: float = 0.05
 
     CORS_ORIGINS: list[str] = ["http://localhost:5173", "http://127.0.0.1:5173"]
 

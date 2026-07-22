@@ -127,7 +127,21 @@ def _maybe_extract_metadata(document_id: str) -> None:
 
     combined_text = "\n\n".join(p["content_text"] for p in source_pages if p.get("content_text"))
 
-    if not combined_text.strip():
+    # ISSUE-007 (AGENT_TASKS.md): metadata degrades to N/A whenever *any*
+    # of the source pages used the pypdf fallback extractor, not only
+    # when there's literally no text at all. The PRD's extraction-
+    # strategy note groups metadata with summary/keywords as things that
+    # are "left as N/A rather than attempted from a degraded input" once
+    # the VLM pipeline has failed for a page — `_process_single_page`
+    # already enforces exactly this for summary/keywords (gated on
+    # `extractor_used == "vlm"`), so metadata follows the same rule
+    # rather than the looser "is there any text at all" check this used
+    # to have. A fallback page still has real, readable pypdf text, but
+    # attempting an LLM extraction call against a degraded, non-VLM
+    # input is exactly what the PRD says not to do.
+    used_fallback = any(p.get("extractor_used") != "vlm" for p in source_pages)
+
+    if not combined_text.strip() or used_fallback:
         with session() as conn:
             documents_repo.set_document_metadata(
                 conn,
@@ -269,6 +283,11 @@ def _extract_page_text(pdf_path: Path, page_number: int) -> tuple[str, str]:
 
 
 def _embed_document_level_vector(document_id: str) -> None:
+    """Writes the one-per-document vector in `document_vec` (title +
+    running_summary). This is intentionally not consulted by
+    `retrieve_pages()` - see `app/services/document_similarity.py`'s
+    module docstring (ISSUE-009, AGENT_TASKS.md) for what this table is
+    for instead and why."""
     with session() as conn:
         doc = documents_repo.get_document(conn, document_id)
         text = "\n\n".join(part for part in (doc.get("title"), doc.get("running_summary")) if part)
