@@ -5,10 +5,12 @@ import AnswerModeToggle from "./AnswerModeToggle.vue";
 const props = defineProps({
   answerMode: { type: String, required: true },
   disabled: { type: Boolean, default: false },
+  lastQueryText: { type: String, default: "" },
 });
 const emit = defineEmits(["update:answerMode", "submit"]);
 
 const text = ref("");
+const textareaRef = ref(null);
 
 function submit() {
   const trimmed = text.value.trim();
@@ -18,17 +20,39 @@ function submit() {
 }
 
 function onKeydown(event) {
+  // Cmd/Ctrl+Enter always submits, regardless of Shift - an explicit,
+  // unambiguous alternate to plain Enter for anyone used to that
+  // convention from other chat apps (ISSUE-019, AGENT_TASKS.md).
+  if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+    event.preventDefault();
+    submit();
+    return;
+  }
   if (event.key === "Enter" && !event.shiftKey) {
     event.preventDefault();
     submit();
+    return;
+  }
+  // Up-arrow, on an empty input, recalls the last submitted query so it
+  // can be edited and resent - only when empty, so it never clobbers
+  // something the person is already typing or interferes with normal
+  // in-textarea cursor movement once there's multi-line content.
+  if (event.key === "ArrowUp" && text.value === "" && props.lastQueryText) {
+    event.preventDefault();
+    text.value = props.lastQueryText;
   }
 }
+
+defineExpose({
+  focus: () => textareaRef.value?.focus(),
+});
 </script>
 
 <template>
   <div class="input-bar">
     <div class="input-row">
       <textarea
+        ref="textareaRef"
         v-model="text"
         class="input-field"
         rows="1"
@@ -40,7 +64,7 @@ function onKeydown(event) {
     </div>
     <div class="input-footer">
       <AnswerModeToggle :model-value="answerMode" @update:model-value="(v) => emit('update:answerMode', v)" />
-      <span class="hint">Enter to send · Shift+Enter for a new line</span>
+      <span class="hint">Enter · ⌘/Ctrl+Enter to send · Shift+Enter for a new line · ↑ to recall · / to focus</span>
     </div>
   </div>
 </template>

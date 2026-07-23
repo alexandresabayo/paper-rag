@@ -1,5 +1,5 @@
 <script setup>
-import { onMounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, ref } from "vue";
 import HistorySidebar from "@/components/research/HistorySidebar.vue";
 import ChatMessage from "@/components/research/ChatMessage.vue";
 import ChatInput from "@/components/research/ChatInput.vue";
@@ -12,6 +12,17 @@ const historyLoading = ref(false);
 const sidebarCollapsed = ref(false);
 const submitting = ref(false);
 const feedRef = ref(null);
+const chatInputRef = ref(null);
+
+// ISSUE-019 (AGENT_TASKS.md): up-arrow-to-recall reads the most recent
+// *submitted* query, not merely the last item in `exchanges` verbatim -
+// same source either way today, but keeping it as its own computed
+// means a future change (e.g. filtering out failed exchanges) only
+// needs to change one place.
+const lastQueryText = computed(() => {
+  const last = exchanges.value[exchanges.value.length - 1];
+  return last ? last.query_text : "";
+});
 
 async function loadHistory() {
   historyLoading.value = true;
@@ -25,29 +36,94 @@ async function loadHistory() {
   }
 }
 
-onMounted(loadHistory);
+onMounted(() => {
+  loadHistory();
+  window.addEventListener("keydown", onGlobalKeydown);
+});
+
+onUnmounted(() => {
+  window.removeEventListener("keydown", onGlobalKeydown);
+});
+
+function isTypingTarget(el) {
+  if (!el) return false;
+  return el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.tagName === "SELECT" || el.isContentEditable;
+}
+
+function onGlobalKeydown(event) {
+  // '/' focuses the chat input from anywhere on the page (ISSUE-019,
+  // AGENT_TASKS.md) - but not while already typing somewhere else, or
+  // it would hijack a literal '/' the person meant to type.
+  if (event.key === "/" && !isTypingTarget(document.activeElement)) {
+    event.preventDefault();
+    chatInputRef.value?.focus();
+  }
+}
 
 async function ask(queryText) {
-  const placeholder = { query_text: queryText, answer_mode: answerMode.value, pending: true };
-  exchanges.value.push(placeholder);
+  const exchange = {
+    query_text: queryText,
+    answer_mode: answerMode.value,
+    pending: true,
+    streaming: false,
+    error: false,
+    errorMessage: null,
+    response_text: "",
+    scenario: null,
+    sources: [],
+  };
+  exchanges.value.push(exchange);
+  scrollToBottom();
+  await submitExchange(exchange);
+}
+
+async function submitExchange(exchange) {
+  exchange.pending = true;
+  exchange.streaming = false;
+  exchange.error = false;
+  exchange.errorMessage = null;
+  exchange.response_text = "";
+  exchange.scenario = null;
+  exchange.sources = [];
   submitting.value = true;
   scrollToBottom();
 
   try {
-    const result = await researchApi.submitQuery(queryText, answerMode.value);
-    Object.assign(placeholder, result, { pending: false });
-    loadHistory();
-  } catch (err) {
-    Object.assign(placeholder, {
-      pending: false,
-      response_text: `Something went wrong reaching the backend: ${err.message}`,
-      sources: [],
-      scenario: null,
+    await researchApi.streamQuery(exchange.query_text, exchange.answer_mode, (message) => {
+      if (message.event === "meta") {
+        // Retrieval + scenario classification already happened server-side
+        // by this point (ISSUE-015, AGENT_TASKS.md) - show the citations
+        // right away rather than waiting for the answer text to finish.
+        exchange.scenario = message.data.scenario;
+        exchange.sources = message.data.sources;
+        exchange.pending = false;
+        exchange.streaming = true;
+      } else if (message.event === "chunk") {
+        exchange.response_text += message.data.text;
+        scrollToBottom();
+      } else if (message.event === "done") {
+        exchange.response_text = message.data.response_text; // authoritative, not just our own concatenation
+        exchange.streaming = false;
+        loadHistory();
+      } else if (message.event === "error") {
+        exchange.error = true;
+        exchange.errorMessage = message.data.message;
+        exchange.streaming = false;
+      }
     });
+  } catch (err) {
+    exchange.error = true;
+    exchange.errorMessage = err.message;
   } finally {
+    exchange.pending = false;
+    exchange.streaming = false;
     submitting.value = false;
     scrollToBottom();
   }
+}
+
+function retryExchange(exchange) {
+  submitExchange(exchange);
 }
 
 function scrollToBottom() {
@@ -65,6 +141,9 @@ function selectHistoryItem(item) {
       scenario: item.scenario,
       sources: [],
       pending: false,
+      streaming: false,
+      error: false,
+      errorMessage: null,
     },
   ];
 }
@@ -88,10 +167,16 @@ function selectHistoryItem(item) {
             Full RAG retrieves from ingested documents first; Direct model skips retrieval entirely.
           </p>
         </div>
-        <ChatMessage v-for="(exchange, i) in exchanges" :key="i" :exchange="exchange" />
+        <ChatMessage v-for="(exchange, i) in exchanges" :key="i" :exchange="exchange" @retry="retryExchange" />
       </div>
 
-      <ChatInput v-model:answer-mode="answerMode" :disabled="submitting" @submit="ask" />
+      <ChatInput
+        ref="chatInputRef"
+        v-model:answer-mode="answerMode"
+        :disabled="submitting"
+        :last-query-text="lastQueryText"
+        @submit="ask"
+      />
     </div>
   </div>
 </template>

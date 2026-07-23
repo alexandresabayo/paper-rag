@@ -10,13 +10,28 @@ file — it's resolved from `generation_settings.model` once, when the
 provider is constructed (see `get_generation_provider()` / callers in
 app/services/llm_call.py), so the same prompt can be pointed at any
 generation-role provider without editing it.
+
+`generate_stream()` (ISSUE-015, AGENT_TASKS.md) is deliberately
+schema-less, unlike `generate()`. A JSON-schema-constrained response
+(`{"type": "json_schema", ...}`) streams back as raw, partial JSON text
+(`{"ans`, then `wer": "Hel`, ...) - not something that can be shown to a
+person token-by-token without incrementally parsing partial JSON, which
+is fragile and out of proportion to what's actually needed here: every
+prompt that ever calls `generate_stream` has a single-string schema
+(`{"answer": <string>}`), so an *unconstrained* streaming completion's
+raw output already IS the answer text, with no wrapper to strip. Schema
+mode stays the default for every other call in this app (ingestion's
+structured extraction, and even the non-streaming answer path if it's
+ever needed again) - this is a narrow, deliberate exception for the one
+call site whose entire output is prose meant to be watched as it's
+written.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
-from typing import Any, Protocol
+from typing import Any, Iterator, Protocol
 
 import openai
 
@@ -32,6 +47,7 @@ _PROSE_FIELD_NAMES = {"answer", "summary", "running_summary", "text"}
 
 class GenerationProviderProtocol(Protocol):
     def generate(self, *, prompt: str, temperature: float, schema: dict[str, Any]) -> dict[str, Any]: ...
+    def generate_stream(self, *, prompt: str, temperature: float) -> Iterator[str]: ...
 
 
 class GenerationProvider:
@@ -92,6 +108,29 @@ class GenerationProvider:
             # case".
             return json_repair.repair_json(raw)
 
+    def generate_stream(self, *, prompt: str, temperature: float) -> Iterator[str]:
+        """Unconstrained streaming completion - see the module docstring
+        for why this doesn't take (or want) a schema. Yields raw text
+        deltas as they arrive; the caller (`app/routers/research.py`)
+        forwards each one straight through as an SSE `chunk` event."""
+        messages = [{"role": "user", "content": prompt}]
+        try:
+            stream = self._client.chat.completions.create(
+                model=self._model,
+                messages=messages,
+                temperature=temperature,
+                stream=True,
+            )
+        except openai.OpenAIError as exc:
+            raise ConfigError(f"Streaming generation call failed for model={self._model!r}: {exc}") from exc
+
+        for chunk in stream:
+            if not chunk.choices:
+                continue  # some servers send a final usage-only chunk with an empty choices list
+            delta = chunk.choices[0].delta.content
+            if delta:
+                yield delta
+
 
 class MockGenerationProvider:
     """Schema-aware placeholder generator: walks the requested JSON schema
@@ -104,6 +143,16 @@ class MockGenerationProvider:
     def generate(self, *, prompt: str, temperature: float, schema: dict[str, Any]) -> dict[str, Any]:
         seed = hashlib.sha256(prompt.encode("utf-8")).hexdigest()[:10]
         return self._fill(schema, seed=seed, prompt_excerpt=prompt[:160])
+
+    def generate_stream(self, *, prompt: str, temperature: float) -> Iterator[str]:
+        """Same placeholder phrasing as the non-streaming mock's "answer"
+        field (`_PROSE_FIELD_NAMES` below), just delivered word-by-word so
+        the streaming path is exercisable end-to-end without a GPU (every
+        automated test in this repo runs in MOCK_MODE - see
+        tests/conftest.py)."""
+        text = f"[MOCK_MODE placeholder — no LLM connected] Stand-in answer for prompt starting: {prompt[:160]!r}"
+        for word in text.split(" "):
+            yield word + " "
 
     def _fill(self, node: dict[str, Any], *, seed: str, prompt_excerpt: str, path: str = "") -> Any:
         node_type = node.get("type", "string")

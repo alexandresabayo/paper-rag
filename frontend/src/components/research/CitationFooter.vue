@@ -1,25 +1,43 @@
 <script setup>
+import { ref } from "vue";
 import SimilarityRule from "@/components/shared/SimilarityRule.vue";
-import { researchApi } from "@/api/research";
+import PdfViewerModal from "./PdfViewerModal.vue";
 
 defineProps({ sources: { type: Array, required: true } });
+
+const activeSource = ref(null);
+
+function openSource(source) {
+  activeSource.value = source;
+}
+
+function closeViewer() {
+  activeSource.value = null;
+}
 </script>
 
 <template>
   <div v-if="sources.length" class="citations">
     <span class="citations-label">Sources</span>
-    <a
+    <button
       v-for="(source, i) in sources"
       :key="i"
+      type="button"
       class="citation"
-      :href="researchApi.pdfUrl(source.document_id)"
-      target="_blank"
-      rel="noopener"
+      @click="openSource(source)"
     >
       <span class="citation-title">{{ source.document_title }}, p. {{ source.page_number }}</span>
       <SimilarityRule :value="source.similarity_score" :label="source.similarity_score.toFixed(2)" size="sm" />
-    </a>
+    </button>
   </div>
+
+  <PdfViewerModal
+    v-if="activeSource"
+    :document-id="activeSource.document_id"
+    :document-title="activeSource.document_title"
+    :page-number="activeSource.page_number"
+    @close="closeViewer"
+  />
 </template>
 
 <style scoped>
@@ -46,6 +64,11 @@ defineProps({ sources: { type: Array, required: true } });
   gap: var(--space-2);
   text-decoration: none;
   min-width: 140px;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  font-family: inherit;
 }
 
 .citation-title {
