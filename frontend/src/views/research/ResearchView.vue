@@ -1,5 +1,5 @@
 <script setup>
-import { computed, onMounted, onUnmounted, ref } from "vue";
+import { computed, onMounted, onUnmounted, reactive, ref } from "vue";
 import HistorySidebar from "@/components/research/HistorySidebar.vue";
 import ChatMessage from "@/components/research/ChatMessage.vue";
 import ChatInput from "@/components/research/ChatInput.vue";
@@ -61,7 +61,25 @@ function onGlobalKeydown(event) {
 }
 
 async function ask(queryText) {
-  const exchange = {
+  // reactive() here, not a plain object literal, is load-bearing (bug
+  // fix, predates the ISSUE-015/018/019 work above): `submitExchange`
+  // and `retryExchange` mutate this `exchange` object directly via the
+  // closure variable/parameter, not by re-reading it through
+  // `exchanges.value[i]`. Vue only triggers a re-render when a mutation
+  // goes *through* a reactive proxy - if `exchange` were a plain object,
+  // pushing it into `exchanges.value` (itself reactive) does NOT retroactively
+  // make this specific closure reference reactive; only reads made
+  // through the array's own proxy would see live updates. In practice
+  // that showed up as the answer staying stuck on "Thinking…"
+  // indefinitely, even once generation had actually finished (visible
+  // in the History sidebar, which re-renders correctly because
+  // `loadHistory()` reassigns `historyItems.value` wholesale - a
+  // genuinely reactive operation, unlike mutating a field on an object
+  // already sitting inside a reactive array). Wrapping the object in
+  // `reactive()` at creation makes the closure variable *itself* the
+  // proxy, so every later mutation - from any function that captured
+  // this same reference - correctly notifies the UI.
+  const exchange = reactive({
     query_text: queryText,
     answer_mode: answerMode.value,
     pending: true,
@@ -71,7 +89,7 @@ async function ask(queryText) {
     response_text: "",
     scenario: null,
     sources: [],
-  };
+  });
   exchanges.value.push(exchange);
   scrollToBottom();
   await submitExchange(exchange);
@@ -134,7 +152,7 @@ function scrollToBottom() {
 
 function selectHistoryItem(item) {
   exchanges.value = [
-    {
+    reactive({
       query_text: item.query_text,
       response_text: item.response_text,
       answer_mode: item.answer_mode,
@@ -144,7 +162,7 @@ function selectHistoryItem(item) {
       streaming: false,
       error: false,
       errorMessage: null,
-    },
+    }),
   ];
 }
 </script>
