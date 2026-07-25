@@ -6,6 +6,12 @@ Ingestion ("pipeline dashboard") router — PRD Section 6:
     (b) edit/correct LLM-extracted metadata by hand
     (c) upload new PDFs directly to kick off ingestion
 
+Plus the P2 dashboard features (ISSUE-020 through ISSUE-024,
+AGENT_TASKS.md): live progress polling and the failed/N-A drill-down
+lists are read entirely off the existing GET endpoints below (no new
+routes needed - see the frontend for that), while bulk retry
+(ISSUE-022) and document deletion (ISSUE-023) each get their own route.
+
 Single-admin, no auth for v1 (Section 6) — there is deliberately no
 authentication/authorization here. Add it if/when a second operator needs
 access; see AGENT_TASKS.md.
@@ -15,6 +21,7 @@ from __future__ import annotations
 
 import sqlite3
 import uuid
+from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
@@ -30,7 +37,7 @@ from app.schemas.ingestion import (
     QualityReport,
     UploadResult,
 )
-from app.services import quality
+from app.services import document_deletion, quality
 from app.services.pdf_render import (
     PDFCorruptedError,
     PDFEmptyError,
@@ -169,6 +176,51 @@ def retry_document(document_id: str, db: sqlite3.Connection = Depends(get_db)) -
     rows = documents_repo.list_documents(db)
     row = next(r for r in rows if r["id"] == document_id)
     return DocumentSummary.from_row(row)
+
+
+@router.post("/documents/retry-all", response_model=list[DocumentSummary])
+def retry_all_failed(db: sqlite3.Connection = Depends(get_db)) -> list[DocumentSummary]:
+    """(ISSUE-022) "Retry all failed" - re-enqueues every document
+    currently in `status == 'failed'` in one call, rather than clicking
+    the single-document retry endpoint above once per document. Each
+    document still resumes from its own last checkpointed page (2.A
+    #12) exactly as a single retry would - this is a bulk *trigger*, not
+    a different retry mechanism. A quiet no-op (returns `[]`) if nothing
+    is currently failed, rather than a 4xx - "retry everything that's
+    failed" when nothing is failed isn't an error, just a no-op."""
+    rows = documents_repo.list_documents(db)
+    failed_ids = [r["id"] for r in rows if r["status"] == "failed"]
+
+    for document_id in failed_ids:
+        ingest_document_task(document_id)
+
+    rows_after = documents_repo.list_documents(db)
+    return [DocumentSummary.from_row(r) for r in rows_after if r["id"] in failed_ids]
+
+
+@router.delete("/documents/{document_id}", status_code=204)
+def delete_document(document_id: str, db: sqlite3.Connection = Depends(get_db)) -> None:
+    """(ISSUE-023) Removes a document, its pages, and every vector row
+    that referenced either - see app/services/document_deletion.py's
+    module docstring for why a bare `DELETE FROM documents` isn't
+    enough by itself. The stored PDF is only unlinked from disk *after*
+    the DB transaction below has committed (same reasoning as that
+    module's docstring: a filesystem delete can't be rolled back, a DB
+    statement can).
+
+    `missing_ok=True` on the unlink because the file may already be
+    gone (e.g. a second delete request racing the first, or manual
+    intervention on disk) - by the time we get here the DB row is
+    already gone either way, which is the state that actually matters
+    to the rest of the app; a missing file at this point is not this
+    endpoint's problem to report."""
+    try:
+        file_path = document_deletion.delete_document(db, document_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Document not found")
+    db.commit()
+
+    Path(file_path).unlink(missing_ok=True)
 
 
 @router.patch("/documents/{document_id}/metadata", response_model=DocumentSummary)

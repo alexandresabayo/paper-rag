@@ -9,6 +9,8 @@ export const ingestionApi = {
     return api.post("/ingestion/documents", formData);
   },
   retryDocument: (documentId) => api.post(`/ingestion/documents/${documentId}/retry`),
+  retryAllFailed: () => api.post("/ingestion/documents/retry-all"),
+  deleteDocument: (documentId) => api.delete(`/ingestion/documents/${documentId}`),
   updateMetadata: (documentId, fields) => api.patch(`/ingestion/documents/${documentId}/metadata`, fields),
   getQualityReport: () => api.get("/ingestion/reports/quality"),
 };

@@ -24,7 +24,18 @@ function loadFromDocument(doc) {
   form.acronym = doc.acronym || "";
 }
 
-watch(() => props.document, loadFromDocument, { immediate: true });
+// Keyed on `document.id`, not the whole object - ISSUE-020's live
+// polling (DocumentDetailView.vue) reassigns `doc.value` to a fresh
+// object every few seconds while a document is still processing, which
+// would otherwise re-fire this watcher on every poll tick and silently
+// clobber whatever the admin is mid-typing here. The form should only
+// reset to server values when it's now looking at a *different*
+// document, not on every incidental refresh of the same one.
+watch(
+  () => props.document?.id,
+  () => loadFromDocument(props.document),
+  { immediate: true },
+);
 
 function submit() {
   emit("save", {

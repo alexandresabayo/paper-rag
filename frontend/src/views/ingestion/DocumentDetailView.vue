@@ -1,5 +1,5 @@
 <script setup>
-import { onMounted, ref } from "vue";
+import { onMounted, onUnmounted, ref } from "vue";
 import { useRouter } from "vue-router";
 import MetadataEditForm from "@/components/ingestion/MetadataEditForm.vue";
 import { ingestionApi } from "@/api/ingestion";
@@ -10,24 +10,78 @@ const router = useRouter();
 const doc = ref(null);
 const loading = ref(true);
 const saveNote = ref("");
+const deletePending = ref(false);
 
-async function load() {
-  loading.value = true;
-  doc.value = await ingestionApi.getDocument(props.documentId);
-  loading.value = false;
+// ISSUE-020 (AGENT_TASKS.md): same recursive-setTimeout polling pattern
+// as IngestionDashboard.vue, scoped to this one document. `silent`
+// skips the `loading` flag so a background refresh doesn't flash the
+// whole page back to "Loading…" every few seconds - only the initial
+// mount does that. See MetadataEditForm.vue for the accompanying fix
+// that keeps a silent refresh from clobbering an in-progress metadata
+// edit.
+const POLL_INTERVAL_MS = 3000;
+let pollTimer = null;
+
+function isActive(status) {
+  return status === "pending" || status === "processing";
 }
 
-onMounted(load);
+function clearPoll() {
+  if (pollTimer) {
+    clearTimeout(pollTimer);
+    pollTimer = null;
+  }
+}
+
+function schedulePoll() {
+  clearPoll();
+  if (!doc.value || !isActive(doc.value.status)) return;
+  pollTimer = setTimeout(async () => {
+    await load({ silent: true });
+    schedulePoll();
+  }, POLL_INTERVAL_MS);
+}
+
+async function load({ silent = false } = {}) {
+  if (!silent) loading.value = true;
+  doc.value = await ingestionApi.getDocument(props.documentId);
+  if (!silent) loading.value = false;
+}
+
+onMounted(async () => {
+  await load();
+  schedulePoll();
+});
+
+onUnmounted(clearPoll);
 
 async function retry() {
   await ingestionApi.retryDocument(props.documentId);
   await load();
+  schedulePoll();
 }
 
 async function saveMetadata(fields) {
   doc.value = await ingestionApi.updateMetadata(props.documentId, fields);
   saveNote.value = "Saved.";
   setTimeout(() => (saveNote.value = ""), 2000);
+}
+
+// ISSUE-023: document deletion, from the detail view too, not just the
+// table row - once removed there's nothing left to show here, so this
+// navigates straight back to the document list.
+async function deleteDocument() {
+  const label = doc.value?.title || doc.value?.file_name;
+  if (!window.confirm(`Delete "${label}"? This removes the document, its pages, and its vectors. This cannot be undone.`)) {
+    return;
+  }
+  deletePending.value = true;
+  try {
+    await ingestionApi.deleteDocument(props.documentId);
+    router.push({ name: "ingestion" });
+  } finally {
+    deletePending.value = false;
+  }
 }
 </script>
 
@@ -39,7 +93,12 @@ async function saveMetadata(fields) {
 
     <template v-else-if="doc">
       <header class="detail-header">
-        <h1 class="detail-title">{{ doc.title || doc.file_name }}</h1>
+        <div class="detail-title-row">
+          <h1 class="detail-title">{{ doc.title || doc.file_name }}</h1>
+          <button class="delete-btn" type="button" :disabled="deletePending" @click="deleteDocument">
+            {{ deletePending ? "Deleting…" : "Delete" }}
+          </button>
+        </div>
         <div class="detail-meta">
           <span class="status-pill" :class="doc.status">{{ doc.status }}</span>
           <span class="mono">{{ doc.pages_done }}/{{ doc.total_pages }} pages</span>
@@ -102,10 +161,37 @@ async function saveMetadata(fields) {
   color: var(--accent);
 }
 
+.detail-title-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-4);
+}
+
 .detail-title {
   font-family: var(--font-serif);
   font-size: 24px;
   margin: 0 0 var(--space-2);
+}
+
+.delete-btn {
+  flex: none;
+  background: transparent;
+  color: var(--text-faint);
+  border: 1px solid var(--divider-strong);
+  border-radius: var(--radius-sm);
+  padding: 4px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: color 0.15s ease, border-color 0.15s ease;
+}
+.delete-btn:hover:not(:disabled) {
+  color: var(--status-failed);
+  border-color: var(--status-failed);
+}
+.delete-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
 }
 
 .detail-meta {
